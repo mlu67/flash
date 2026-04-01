@@ -3,7 +3,7 @@ import { startGame, submitAnswer, checkQuestionComplete, markTimedOut, advanceQu
 import { getCategories } from './words.js';
 
 const QUESTION_TIMEOUT_MS = 10_000;
-const RESULT_PAUSE_MS = 3_000;
+const RESULT_PAUSE_MS = 2_000;
 const roomTimers = new Map();
 
 function clearRoomTimer(roomCode) {
@@ -27,6 +27,8 @@ function emitQuestionResult(io, room) {
     } else {
       room.status = 'results';
       const leaderboard = getLeaderboard(room);
+      const scores = leaderboard.map(p => `${p.name}: ${p.score}`).join(', ');
+      console.log(`[Room ${room.roomCode}] Game ended — ${scores}`);
       io.to(room.roomCode).emit('game-over', { leaderboard });
     }
   }, RESULT_PAUSE_MS);
@@ -52,32 +54,45 @@ export function registerHandlers(io, socket) {
 
   socket.on('create-room', ({ playerName, category, questionCount }) => {
     const room = createRoom(playerId, playerName, category, questionCount);
+    console.log(`[Room ${room.roomCode}] Host "${playerName}" created room`);
     socket.join(room.roomCode);
     socket.emit('room-created', { roomCode: room.roomCode });
+    socket.emit('player-joined', {
+      players: room.players.map(p => ({ id: p.id, name: p.name, connected: p.connected })),
+    });
   });
 
   socket.on('join-room', ({ roomCode, playerName }) => {
     const code = roomCode.toUpperCase();
     const room = joinRoom(code, playerId, playerName);
+    if (room) {
+      console.log(`[Room ${code}] Player "${playerName}" joined`);
+    }
     if (!room) {
       socket.emit('error', { message: 'Room not found' });
       return;
     }
+    socket.join(code);
+    // Cancel grace period timer if someone is reconnecting
+    clearRoomTimer(code + ':grace');
     if (room.status !== 'lobby') {
-      socket.join(code);
       socket.emit('rejoin', {
+        roomCode: code,
         status: room.status,
         currentQuestion: room.status === 'playing' ? getCurrentQuestion(room) : null,
         players: room.players.map(p => ({ id: p.id, name: p.name, score: p.score })),
         totalQuestions: room.questions.length,
         isHost: playerId === room.hostId,
       });
-      io.to(code).emit('player-joined', {
+    } else {
+      socket.emit('rejoin', {
+        roomCode: code,
+        status: 'lobby',
         players: room.players.map(p => ({ id: p.id, name: p.name, connected: p.connected })),
+        totalQuestions: 0,
+        isHost: playerId === room.hostId,
       });
-      return;
     }
-    socket.join(code);
     io.to(code).emit('player-joined', {
       players: room.players.map(p => ({ id: p.id, name: p.name, connected: p.connected })),
     });
@@ -90,6 +105,8 @@ export function registerHandlers(io, socket) {
       return;
     }
     startGame(room);
+    const playerNames = room.players.map(p => p.name).join(', ');
+    console.log(`[Room ${roomCode}] Game started — category: ${room.category || 'All'}, questions: ${room.questions.length}, players: [${playerNames}]`);
     io.to(roomCode).emit('game-started', { totalQuestions: room.questions.length });
     sendNextQuestion(io, room);
   });
@@ -129,9 +146,18 @@ export function registerHandlers(io, socket) {
     if (player) player.connected = false;
     const allDisconnected = room.players.every(p => !p.connected);
     if (allDisconnected) {
-      clearRoomTimer(room.roomCode);
-      clearRoomTimer(room.roomCode + ':pause');
-      removeRoom(room.roomCode);
+      // Grace period: wait 5s before removing the room so refreshing players can reconnect
+      const graceTimer = setTimeout(() => {
+        const currentRoom = getRoom(room.roomCode);
+        if (!currentRoom) return;
+        const stillAllDisconnected = currentRoom.players.every(p => !p.connected);
+        if (stillAllDisconnected) {
+          clearRoomTimer(currentRoom.roomCode);
+          clearRoomTimer(currentRoom.roomCode + ':pause');
+          removeRoom(currentRoom.roomCode);
+        }
+      }, 5000);
+      roomTimers.set(room.roomCode + ':grace', graceTimer);
       return;
     }
     if (room.status === 'playing' && checkQuestionComplete(room)) {

@@ -1,5 +1,5 @@
 import { useState, useEffect } from 'react';
-import socket from '../socket';
+import socket, { saveSession } from '../socket';
 
 export default function CreateGameScreen({ onBack }) {
   const [playerName, setPlayerName] = useState('');
@@ -15,10 +15,15 @@ export default function CreateGameScreen({ onBack }) {
 
   function handleCreate() {
     if (!playerName.trim()) return;
+    const name = playerName.trim();
     socket.emit('create-room', {
-      playerName: playerName.trim(),
+      playerName: name,
       category,
       questionCount,
+    });
+    // Save name so we can rejoin on refresh (roomCode saved after room-created)
+    socket.once('room-created', ({ roomCode }) => {
+      saveSession(roomCode, name);
     });
   }
 

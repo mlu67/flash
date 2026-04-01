@@ -68,6 +68,27 @@ async function playFullGameMultiplayer(hostPage, playerPage) {
 }
 
 test.describe('Main Flow', () => {
+  test('first question is not missed on game start', async ({ page }) => {
+    test.setTimeout(60_000);
+
+    await createGame(page, { questionCount: 10 });
+    await page.getByRole('button', { name: 'Start Game' }).click();
+
+    // The first question should appear immediately — not "Waiting for first question..."
+    await waitForQuestion(page);
+
+    // Verify question counter shows "1 / 10" — meaning Q1 was received
+    await expect(page.getByText('1 / 10')).toBeVisible({ timeout: 5_000 });
+
+    // Verify the article buttons are enabled (not timed out)
+    const derButton = page.getByRole('button', { name: 'der', exact: true });
+    await expect(derButton).toBeEnabled();
+
+    // Answer it to prove it's interactive
+    await answerQuestion(page, 'der');
+    await waitForQuestionResult(page);
+  });
+
   test('single player happy path', async ({ page }) => {
     test.setTimeout(180_000);
 
@@ -134,6 +155,109 @@ test.describe('Main Flow', () => {
     } finally {
       await hostContext.close();
       await playerContext.close();
+    }
+  });
+
+  test('three players complete a game together', async ({ browser }) => {
+    test.setTimeout(180_000);
+
+    const ctx1 = await browser.newContext();
+    const ctx2 = await browser.newContext();
+    const ctx3 = await browser.newContext();
+    const hostPage = await ctx1.newPage();
+    const player2Page = await ctx2.newPage();
+    const player3Page = await ctx3.newPage();
+
+    try {
+      // Host creates game
+      const roomCode = await createGame(hostPage, { playerName: 'Alice', questionCount: 10 });
+
+      // Two players join
+      await joinGame(player2Page, roomCode, 'Bob');
+      await joinGame(player3Page, roomCode, 'Charlie');
+
+      // All three see 3 players in lobby
+      await expect(hostPage.getByText('Players (3)')).toBeVisible();
+      await expect(player2Page.getByText('Players (3)')).toBeVisible();
+      await expect(player3Page.getByText('Players (3)')).toBeVisible();
+
+      // Only host sees Start Game button
+      await expect(hostPage.getByRole('button', { name: 'Start Game' })).toBeVisible();
+      await expect(player2Page.getByRole('button', { name: 'Start Game' })).not.toBeVisible();
+      await expect(player3Page.getByRole('button', { name: 'Start Game' })).not.toBeVisible();
+
+      // Host starts game
+      await hostPage.getByRole('button', { name: 'Start Game' }).click();
+
+      // Play all questions — all three answer each round
+      while (true) {
+        const onResults = await hostPage.getByText('Results').isVisible().catch(() => false);
+        if (onResults) break;
+
+        const h1Visible = await hostPage.locator('h1').isVisible().catch(() => false);
+        if (!h1Visible) {
+          await hostPage.waitForTimeout(200);
+          continue;
+        }
+
+        const hostDer = hostPage.getByRole('button', { name: 'der', exact: true });
+        const hostDisabled = await hostDer.isDisabled().catch(() => true);
+
+        if (!hostDisabled) {
+          // All three answer
+          await answerQuestion(hostPage, 'der');
+          try {
+            const p2Disabled = await player2Page.getByRole('button', { name: 'die', exact: true }).isDisabled().catch(() => true);
+            if (!p2Disabled) await answerQuestion(player2Page, 'die');
+          } catch { /* not ready */ }
+          try {
+            const p3Disabled = await player3Page.getByRole('button', { name: 'das', exact: true }).isDisabled().catch(() => true);
+            if (!p3Disabled) await answerQuestion(player3Page, 'das');
+          } catch { /* not ready */ }
+        }
+
+        try {
+          await hostPage.waitForFunction(
+            () => {
+              if (document.body.innerText.includes('Play Again')) return true;
+              const buttons = document.querySelectorAll('button');
+              for (const b of buttons) {
+                if (b.textContent === 'der' && !b.disabled) return true;
+              }
+              return false;
+            },
+            {},
+            { timeout: 15_000 }
+          );
+        } catch {
+          const done = await hostPage.getByText('Results').isVisible().catch(() => false);
+          if (done) break;
+        }
+      }
+
+      // All three land on results
+      await hostPage.waitForSelector('text=Results', { timeout: 20_000 });
+      await player2Page.waitForSelector('text=Results', { timeout: 20_000 });
+      await player3Page.waitForSelector('text=Results', { timeout: 20_000 });
+
+      // All three names appear on the leaderboard
+      await expect(hostPage.getByText('Alice')).toBeVisible();
+      await expect(hostPage.getByText('Bob')).toBeVisible();
+      await expect(hostPage.getByText('Charlie')).toBeVisible();
+
+      // Non-hosts see "Waiting for host..."
+      await expect(player2Page.getByText('Waiting for host...')).toBeVisible();
+      await expect(player3Page.getByText('Waiting for host...')).toBeVisible();
+
+      // Host ends game — all return to home
+      await hostPage.getByRole('button', { name: 'End Game' }).click();
+      await expect(hostPage.getByRole('button', { name: 'Create Game' })).toBeVisible();
+      await expect(player2Page.getByRole('button', { name: 'Create Game' })).toBeVisible();
+      await expect(player3Page.getByRole('button', { name: 'Create Game' })).toBeVisible();
+    } finally {
+      await ctx1.close();
+      await ctx2.close();
+      await ctx3.close();
     }
   });
 });

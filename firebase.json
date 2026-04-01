@@ -7,7 +7,7 @@
         "source": "/socket.io/**",
         "run": {
           "serviceId": "flash-server",
-          "region": "us-central1"
+          "region": "europe-west6"
         }
       },
       {

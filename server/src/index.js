@@ -9,9 +9,13 @@ import { cleanupStaleRooms } from './room-manager.js';
 const app = express();
 const httpServer = createServer(app);
 
+const allowedOrigins = process.env.CLIENT_ORIGIN
+  ? process.env.CLIENT_ORIGIN.split(',')
+  : ['http://localhost:5173'];
+
 const io = new Server(httpServer, {
   cors: {
-    origin: process.env.CLIENT_ORIGIN || 'http://localhost:5173',
+    origin: allowedOrigins,
     credentials: true,
   },
 });
@@ -21,12 +25,7 @@ app.use(cookieParser());
 app.get('/health', (req, res) => res.send('ok'));
 
 io.use((socket, next) => {
-  const cookies = socket.handshake.headers.cookie;
-  let playerId = null;
-  if (cookies) {
-    const match = cookies.match(/playerId=([^;]+)/);
-    if (match) playerId = match[1];
-  }
+  let playerId = socket.handshake.auth?.playerId || null;
   if (!playerId) {
     playerId = uuidv4();
   }

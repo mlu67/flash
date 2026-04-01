@@ -1,16 +1,25 @@
 import { useState, useEffect } from 'react';
-import socket, { getPlayerId } from '../socket';
+import socket, { getPlayerId, clearSession } from '../socket';
 import ArticleButton from '../components/ArticleButton';
 import Timer from '../components/Timer';
 import Scoreboard from '../components/Scoreboard';
 
-export default function GameScreen({ roomCode, totalQuestions }) {
+export default function GameScreen({ roomCode, totalQuestions, firstQuestion, onQuestionConsumed, isHost, onExit }) {
   const [question, setQuestion] = useState(null);
   const [selectedArticle, setSelectedArticle] = useState(null);
   const [result, setResult] = useState(null);
   const [timerRunning, setTimerRunning] = useState(false);
   const [players, setPlayers] = useState([]);
   const [answeredPlayers, setAnsweredPlayers] = useState(new Set());
+
+  // Consume the buffered first question from App
+  useEffect(() => {
+    if (firstQuestion && !question) {
+      setQuestion(firstQuestion);
+      setTimerRunning(true);
+      onQuestionConsumed();
+    }
+  }, [firstQuestion]);
 
   useEffect(() => {
     socket.on('new-question', (q) => {
@@ -82,12 +91,12 @@ export default function GameScreen({ roomCode, totalQuestions }) {
         </span>
       </div>
 
-      <h1 style={{ fontSize: '3rem', margin: '24px 0', color: 'var(--color-text)' }}>
+      <h1 key={question.questionIndex} className="word-pop" style={{ fontSize: '3rem', margin: '24px 0', color: 'var(--color-text)' }}>
         {question.noun}
       </h1>
 
       {result && selectedArticle === result.correctArticle && (
-        <div style={{ color: 'var(--color-correct)', fontWeight: 700, fontSize: '1.2rem', marginBottom: '12px' }}>
+        <div className="score-pop" style={{ color: 'var(--color-correct)', fontWeight: 800, fontSize: '1.5rem', marginBottom: '12px' }}>
           +1
         </div>
       )}
@@ -105,6 +114,27 @@ export default function GameScreen({ roomCode, totalQuestions }) {
       </div>
 
       <Scoreboard players={players} currentPlayerId={getPlayerId()} />
+
+      <button
+        onClick={() => {
+          if (isHost) {
+            socket.emit('end-game', { roomCode });
+          } else {
+            clearSession();
+            onExit();
+          }
+        }}
+        style={{
+          marginTop: '16px',
+          background: 'none',
+          color: 'var(--color-text-light)',
+          fontSize: '0.85rem',
+          boxShadow: 'none',
+          padding: '8px',
+        }}
+      >
+        {isHost ? 'End Game' : 'Leave Game'}
+      </button>
     </div>
   );
 }

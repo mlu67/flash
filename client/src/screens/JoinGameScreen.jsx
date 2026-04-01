@@ -1,5 +1,5 @@
 import { useState } from 'react';
-import socket from '../socket';
+import socket, { saveSession } from '../socket';
 
 export default function JoinGameScreen({ onBack, onJoined }) {
   const [playerName, setPlayerName] = useState('');
@@ -8,7 +8,9 @@ export default function JoinGameScreen({ onBack, onJoined }) {
   function handleJoin() {
     if (!playerName.trim() || !roomCode.trim()) return;
     const code = roomCode.trim().toUpperCase();
-    socket.emit('join-room', { roomCode: code, playerName: playerName.trim() });
+    const name = playerName.trim();
+    socket.emit('join-room', { roomCode: code, playerName: name });
+    saveSession(code, name);
     onJoined(code);
   }
 

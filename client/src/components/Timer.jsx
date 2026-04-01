@@ -28,8 +28,10 @@ export default function Timer({ duration, running, onTimeout }) {
   const offset = CIRCUMFERENCE * (1 - fraction);
   const color = timeLeft <= 3 ? 'var(--color-wrong)' : 'var(--color-primary)';
 
+  const isWarning = running && timeLeft <= 3 && timeLeft > 0;
+
   return (
-    <div style={{ display: 'flex', flexDirection: 'column', alignItems: 'center' }}>
+    <div className={isWarning ? 'pulse-warning' : ''} style={{ display: 'flex', flexDirection: 'column', alignItems: 'center' }}>
       <svg width="80" height="80" viewBox="0 0 80 80">
         <circle cx="40" cy="40" r={RADIUS} fill="none" stroke="#e5e7eb" strokeWidth="6" />
         <circle

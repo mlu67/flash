@@ -1,5 +1,5 @@
 import { useState, useEffect } from 'react';
-import socket, { getPlayerId } from './socket';
+import socket, { getPlayerId, saveSession, clearSession, getSavedSession } from './socket';
 import HomeScreen from './screens/HomeScreen';
 import CreateGameScreen from './screens/CreateGameScreen';
 import JoinGameScreen from './screens/JoinGameScreen';
@@ -13,6 +13,7 @@ export default function App() {
   const [players, setPlayers] = useState([]);
   const [isHost, setIsHost] = useState(false);
   const [totalQuestions, setTotalQuestions] = useState(0);
+  const [firstQuestion, setFirstQuestion] = useState(null);
 
   useEffect(() => {
     socket.on('room-created', ({ roomCode }) => {
@@ -23,6 +24,11 @@ export default function App() {
 
     socket.on('player-joined', ({ players }) => {
       setPlayers(players);
+    });
+
+    // Buffer the first new-question that arrives before GameScreen mounts
+    socket.on('new-question', (q) => {
+      setFirstQuestion(q);
     });
 
     socket.on('game-started', ({ totalQuestions }) => {
@@ -39,24 +45,39 @@ export default function App() {
       setRoomCode(null);
       setPlayers([]);
       setIsHost(false);
+      clearSession();
       setScreen('home');
     });
 
-    socket.on('rejoin', ({ status, players, totalQuestions: total, isHost: host }) => {
+    socket.on('rejoin', ({ status, players, totalQuestions: total, isHost: host, roomCode: code, currentQuestion }) => {
+      if (code) setRoomCode(code);
       setPlayers(players);
       setTotalQuestions(total);
       setIsHost(host);
-      if (status === 'playing') setScreen('game');
+      if (status === 'playing' && currentQuestion) {
+        setFirstQuestion(currentQuestion);
+      }
+      if (status === 'lobby') setScreen('lobby');
+      else if (status === 'playing') setScreen('game');
       else if (status === 'results') setScreen('results');
     });
 
     socket.on('error', ({ message }) => {
+      // If rejoin failed (room gone), clear session and stay on home
+      clearSession();
       alert(message);
     });
+
+    // Auto-rejoin saved session on page load
+    const session = getSavedSession();
+    if (session) {
+      socket.emit('join-room', { roomCode: session.roomCode, playerName: session.playerName });
+    }
 
     return () => {
       socket.off('room-created');
       socket.off('player-joined');
+      socket.off('new-question');
       socket.off('game-started');
       socket.off('game-over');
       socket.off('game-ended');
@@ -76,7 +97,7 @@ export default function App() {
     create: <CreateGameScreen onBack={() => setScreen('home')} />,
     join: <JoinGameScreen onBack={() => setScreen('home')} onJoined={handleJoinedRoom} />,
     lobby: <LobbyScreen roomCode={roomCode} players={players} isHost={isHost} />,
-    game: <GameScreen roomCode={roomCode} totalQuestions={totalQuestions} />,
+    game: <GameScreen roomCode={roomCode} totalQuestions={totalQuestions} firstQuestion={firstQuestion} onQuestionConsumed={() => setFirstQuestion(null)} isHost={isHost} onExit={() => { clearSession(); setScreen('home'); }} />,
     results: <ResultsScreen roomCode={roomCode} players={players} isHost={isHost} />,
   };
 
