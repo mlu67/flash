@@ -1,3 +1,5 @@
+import logger from './logger.js';
+
 const rooms = new Map();
 const playerRoomMap = new Map();
 
@@ -81,10 +83,16 @@ export function removeRoom(roomCode) {
 
 export function cleanupStaleRooms() {
   const now = Date.now();
+  let removed = 0;
   for (const [code, room] of rooms) {
     if (now - room.lastActivity > STALE_TIMEOUT_MS) {
+      logger.info({ event_type: 'room_stale_removed', room_code: code, player_count: room.players.length, status: room.status }, 'Stale room removed');
       removeRoom(code);
+      removed++;
     }
+  }
+  if (removed > 0) {
+    logger.info({ event_type: 'stale_cleanup', rooms_removed: removed, rooms_remaining: rooms.size }, 'Stale room cleanup completed');
   }
 }
 

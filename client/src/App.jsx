@@ -14,6 +14,7 @@ export default function App() {
   const [isHost, setIsHost] = useState(false);
   const [totalQuestions, setTotalQuestions] = useState(0);
   const [firstQuestion, setFirstQuestion] = useState(null);
+  const [connectionError, setConnectionError] = useState(null);
 
   useEffect(() => {
     socket.on('room-created', ({ roomCode }) => {
@@ -62,6 +63,16 @@ export default function App() {
       else if (status === 'results') setScreen('results');
     });
 
+    socket.on('connect', () => {
+      setConnectionError(null);
+    });
+
+    socket.on('connect_error', (err) => {
+      if (err.message === 'Server is full, please try again later') {
+        setConnectionError(err.message);
+      }
+    });
+
     socket.on('error', ({ message }) => {
       // If rejoin failed (room gone), clear session and stay on home
       clearSession();
@@ -82,6 +93,8 @@ export default function App() {
       socket.off('game-over');
       socket.off('game-ended');
       socket.off('rejoin');
+      socket.off('connect');
+      socket.off('connect_error');
       socket.off('error');
     };
   }, []);
@@ -100,6 +113,17 @@ export default function App() {
     game: <GameScreen roomCode={roomCode} totalQuestions={totalQuestions} firstQuestion={firstQuestion} onQuestionConsumed={() => setFirstQuestion(null)} isHost={isHost} onExit={() => { clearSession(); setScreen('home'); }} />,
     results: <ResultsScreen roomCode={roomCode} players={players} isHost={isHost} />,
   };
+
+  if (connectionError) {
+    return (
+      <div style={{ display: 'flex', justifyContent: 'center', alignItems: 'center', height: '100vh', textAlign: 'center', padding: '1rem' }}>
+        <div>
+          <h2>Server is full</h2>
+          <p>Too many players right now. Please try again in a few minutes.</p>
+        </div>
+      </div>
+    );
+  }
 
   return <div>{screens[screen]}</div>;
 }

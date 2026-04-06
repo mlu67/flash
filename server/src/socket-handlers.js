@@ -1,6 +1,7 @@
 import { createRoom, joinRoom, getRoom, getRoomByPlayerId, removeRoom } from './room-manager.js';
 import { startGame, submitAnswer, checkQuestionComplete, markTimedOut, advanceQuestion, getCurrentQuestion, getQuestionResult, getLeaderboard } from './game-loop.js';
 import { getCategories } from './words.js';
+import logger from './logger.js';
 
 const QUESTION_TIMEOUT_MS = 10_000;
 const RESULT_PAUSE_MS = 2_000;
@@ -28,7 +29,7 @@ function emitQuestionResult(io, room) {
       room.status = 'results';
       const leaderboard = getLeaderboard(room);
       const scores = leaderboard.map(p => `${p.name}: ${p.score}`).join(', ');
-      console.log(`[Room ${room.roomCode}] Game ended — ${scores}`);
+      logger.info({ event_type: 'game_ended', room_code: room.roomCode, leaderboard, player_count: room.players.length }, 'Game ended');
       io.to(room.roomCode).emit('game-over', { leaderboard });
     }
   }, RESULT_PAUSE_MS);
@@ -45,30 +46,43 @@ function sendNextQuestion(io, room) {
   roomTimers.set(room.roomCode, timer);
 }
 
+function safe(handler) {
+  return (...args) => {
+    try {
+      handler(...args);
+    } catch (err) {
+      logger.error({ event_type: 'unhandled_error', err: { message: err.message, stack: err.stack } }, 'Unhandled error in socket handler');
+    }
+  };
+}
+
 export function registerHandlers(io, socket) {
   const playerId = socket.playerId;
+
+  logger.info({ event_type: 'player_connected', player_id: playerId }, 'Player connected');
 
   socket.on('get-categories', (callback) => {
     callback(getCategories());
   });
 
-  socket.on('create-room', ({ playerName, category, questionCount }) => {
+  socket.on('create-room', safe(({ playerName, category, questionCount }) => {
     const room = createRoom(playerId, playerName, category, questionCount);
-    console.log(`[Room ${room.roomCode}] Host "${playerName}" created room`);
+    logger.info({ event_type: 'room_created', room_code: room.roomCode, player_name: playerName }, 'Room created');
     socket.join(room.roomCode);
     socket.emit('room-created', { roomCode: room.roomCode });
     socket.emit('player-joined', {
       players: room.players.map(p => ({ id: p.id, name: p.name, connected: p.connected })),
     });
-  });
+  }));
 
-  socket.on('join-room', ({ roomCode, playerName }) => {
+  socket.on('join-room', safe(({ roomCode, playerName }) => {
     const code = roomCode.toUpperCase();
     const room = joinRoom(code, playerId, playerName);
     if (room) {
-      console.log(`[Room ${code}] Player "${playerName}" joined`);
+      logger.info({ event_type: 'player_joined', room_code: code, player_name: playerName }, 'Player joined');
     }
     if (!room) {
+      logger.warn({ event_type: 'join_room_failed', room_code: code, player_id: playerId }, 'Player tried to join non-existent room');
       socket.emit('error', { message: 'Room not found' });
       return;
     }
@@ -96,51 +110,56 @@ export function registerHandlers(io, socket) {
     io.to(code).emit('player-joined', {
       players: room.players.map(p => ({ id: p.id, name: p.name, connected: p.connected })),
     });
-  });
+  }));
 
-  socket.on('start-game', ({ roomCode }) => {
+  socket.on('start-game', safe(({ roomCode }) => {
     const room = getRoom(roomCode);
     if (!room || room.hostId !== playerId) {
+      logger.warn({ event_type: 'start_game_denied', room_code: roomCode, player_id: playerId, reason: !room ? 'room_not_found' : 'not_host' }, 'Unauthorized start-game attempt');
       socket.emit('error', { message: 'Only the host can start the game' });
       return;
     }
     startGame(room);
-    const playerNames = room.players.map(p => p.name).join(', ');
-    console.log(`[Room ${roomCode}] Game started — category: ${room.category || 'All'}, questions: ${room.questions.length}, players: [${playerNames}]`);
+    logger.info({ event_type: 'game_started', room_code: roomCode, category: room.category || 'All', question_count: room.questions.length, player_count: room.players.length, players: room.players.map(p => p.name) }, 'Game started');
     io.to(roomCode).emit('game-started', { totalQuestions: room.questions.length });
     sendNextQuestion(io, room);
-  });
+  }));
 
-  socket.on('submit-answer', ({ roomCode, article }) => {
+  socket.on('submit-answer', safe(({ roomCode, article }) => {
     const room = getRoom(roomCode);
-    if (!room || room.status !== 'playing') return;
+    if (!room || room.status !== 'playing') {
+      logger.warn({ event_type: 'submit_answer_rejected', room_code: roomCode, player_id: playerId, reason: !room ? 'room_not_found' : `room_status_${room.status}` }, 'Answer submitted to invalid room');
+      return;
+    }
     const result = submitAnswer(room, playerId, article);
     if (!result) return;
     io.to(roomCode).emit('player-answered', { playerId, playerName: room.players.find(p => p.id === playerId)?.name });
     if (checkQuestionComplete(room)) {
       emitQuestionResult(io, room);
     }
-  });
+  }));
 
-  socket.on('play-again', ({ roomCode }) => {
+  socket.on('play-again', safe(({ roomCode }) => {
     const room = getRoom(roomCode);
     if (!room || room.hostId !== playerId) return;
     startGame(room);
     io.to(roomCode).emit('game-started', { totalQuestions: room.questions.length });
     sendNextQuestion(io, room);
-  });
+  }));
 
-  socket.on('end-game', ({ roomCode }) => {
+  socket.on('end-game', safe(({ roomCode }) => {
     const room = getRoom(roomCode);
     if (!room || room.hostId !== playerId) return;
     clearRoomTimer(roomCode);
     clearRoomTimer(roomCode + ':pause');
     io.to(roomCode).emit('game-ended');
     removeRoom(roomCode);
-  });
+  }));
 
-  socket.on('disconnect', () => {
+  socket.on('disconnect', safe(() => {
     const room = getRoomByPlayerId(playerId);
+    const playerName = room?.players.find(p => p.id === playerId)?.name;
+    logger.info({ event_type: 'player_disconnected', player_id: playerId, player_name: playerName, room_code: room?.roomCode }, 'Player disconnected');
     if (!room) return;
     const player = room.players.find(p => p.id === playerId);
     if (player) player.connected = false;
@@ -163,5 +182,5 @@ export function registerHandlers(io, socket) {
     if (room.status === 'playing' && checkQuestionComplete(room)) {
       emitQuestionResult(io, room);
     }
-  });
+  }));
 }

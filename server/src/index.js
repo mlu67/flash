@@ -5,6 +5,7 @@ import cookieParser from 'cookie-parser';
 import { v4 as uuidv4 } from 'uuid';
 import { registerHandlers } from './socket-handlers.js';
 import { cleanupStaleRooms } from './room-manager.js';
+import logger from './logger.js';
 
 const app = express();
 const httpServer = createServer(app);
@@ -24,7 +25,13 @@ app.use(cookieParser());
 
 app.get('/health', (req, res) => res.send('ok'));
 
+const MAX_CONNECTIONS = parseInt(process.env.MAX_CONNECTIONS, 10) || 800;
+
 io.use((socket, next) => {
+  if (io.engine.clientsCount >= MAX_CONNECTIONS) {
+    logger.warn({ event_type: 'connection_rejected', current_connections: io.engine.clientsCount }, 'Max connections reached');
+    return next(new Error('Server is full, please try again later'));
+  }
   let playerId = socket.handshake.auth?.playerId || null;
   if (!playerId) {
     playerId = uuidv4();
@@ -42,5 +49,5 @@ setInterval(cleanupStaleRooms, 5 * 60 * 1000);
 
 const PORT = process.env.PORT || 3001;
 httpServer.listen(PORT, () => {
-  console.log(`Server running on port ${PORT}`);
+  logger.info({ event_type: 'server_started', port: PORT }, 'Server started');
 });
