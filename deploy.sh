@@ -51,7 +51,7 @@ npm run build
 cd ..
 
 echo "=== Deploying server to Cloud Run ==="
-gcloud run deploy $SERVICE_NAME --source=server --region=$REGION --allow-unauthenticated --concurrency=1000 --cpu-throttling --min-instances=0 --set-env-vars="GCLOUD_PROJECT=$PROJECT_ID,CLIENT_ORIGIN=https://$PROJECT_ID.web.app"
+gcloud run deploy $SERVICE_NAME --source=server --region=$REGION --allow-unauthenticated --concurrency=800 --memory=512Mi --max-instances=1 --min-instances=0 --cpu-throttling --set-env-vars="GCLOUD_PROJECT=$PROJECT_ID,CLIENT_ORIGIN=https://$PROJECT_ID.web.app"
 
 echo "=== Deploying client to Firebase Hosting ==="
 firebase deploy --only hosting

@@ -3,6 +3,7 @@ import { createServer } from 'http';
 import { Server } from 'socket.io';
 import cookieParser from 'cookie-parser';
 import { v4 as uuidv4 } from 'uuid';
+import geoip from 'geoip-lite';
 import { registerHandlers } from './socket-handlers.js';
 import { cleanupStaleRooms } from './room-manager.js';
 import logger from './logger.js';
@@ -41,6 +42,11 @@ io.use((socket, next) => {
 });
 
 io.on('connection', (socket) => {
+  const forwarded = socket.handshake.headers['x-forwarded-for'];
+  const ip = forwarded ? forwarded.split(',')[0].trim() : socket.handshake.address;
+  const geo = geoip.lookup(ip);
+  const region = geo ? `${geo.city || '?'}, ${geo.country}` : 'unknown';
+  logger.info({ event_type: 'connection', player_id: socket.playerId, ip, region }, 'Player connected');
   socket.emit('player-id', { playerId: socket.playerId });
   registerHandlers(io, socket);
 });
